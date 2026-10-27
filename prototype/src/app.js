@@ -5,7 +5,9 @@
  */
 (function () {
   'use strict';
-  const M = window.MedMind, LABEL = window.ReadLabelMock, I = window.Icons, fmt = M.fmt, T = M.parseTime;
+  const M = window.MedMind, I = window.Icons, fmt = M.fmt, T = M.parseTime;
+  // ระบบสแกน: QR (qrCode + qrScanner) และฉลากยา (readLabel → labelParser)
+  const QR = window.QrCode, SCANNER = window.QrScanner, OCR = window.ReadLabel, PARSER = window.LabelParser;
   const CAREGIVER = 'caregiver-1';
   const MEAL_OPTIONS = [['breakfast', 'เช้า'], ['lunch', 'กลางวัน'], ['dinner', 'เย็น']];
   const DEFAULT_MEALS = { breakfast: T('07:00'), lunch: T('12:00'), dinner: T('18:00'), bedtime: T('21:00') };
@@ -24,7 +26,7 @@
       swapped: false,   // เครื่องซ้ายเลือก "ผู้ดูแล" → สลับตำแหน่งโทรศัพท์ ให้เครื่องที่กดเป็นบทบาทที่เลือก
       soundOn: false, reminderOpen: false, dismissed: {}, ringing: false,
       cgTab: 'C1', cgMsg: null, srMsg: null, cameraAllowed: true,
-      draft: null, draftNote: null, unreadable: [], mealDraft: null, saved: null,
+      draft: null, draftNote: null, unreadable: [], mealDraft: null, saved: null, reading: false,
       dialog: null, log: [], autoTimer: null, realTimer: null,
     };
     S.store.today = isoOf(new Date());   // วันที่จำลอง = วันนี้ของเครื่อง
@@ -81,21 +83,17 @@
     });
   }
 
-  /* ---------- QR จำลอง ---------- */
+  /* ---------- QR รหัสเชิญ (FR-01 ✓1) ---------- */
 
+  const QR_QUIET_ZONE = 4;   // ขอบขาวรอบ QR 4 ช่องตามมาตรฐาน ให้กล้องจับได้
   function drawQR(canvas, code) {
-    const n = 21, ctx = canvas.getContext('2d');
+    const rows = QR.qrMatrix(code), n = rows.length + QR_QUIET_ZONE * 2, ctx = canvas.getContext('2d');
     const css = getComputedStyle(document.documentElement);
-    const dark = css.getPropertyValue('--color-frame').trim(), light = css.getPropertyValue('--color-surface').trim();
     canvas.width = n; canvas.height = n;
-    ctx.fillStyle = light; ctx.fillRect(0, 0, n, n); ctx.fillStyle = dark;
-    let h = 0; for (const c of code) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return (h >>> 0) / 4294967296; };
-    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (rnd() > 0.5) ctx.fillRect(x, y, 1, 1);
-    [[0, 0], [n - 7, 0], [0, n - 7]].forEach(function (p) {
-      ctx.fillStyle = dark; ctx.fillRect(p[0], p[1], 7, 7);
-      ctx.fillStyle = light; ctx.fillRect(p[0] + 1, p[1] + 1, 5, 5);
-      ctx.fillStyle = dark; ctx.fillRect(p[0] + 2, p[1] + 2, 3, 3);
+    ctx.fillStyle = css.getPropertyValue('--color-surface').trim(); ctx.fillRect(0, 0, n, n);
+    ctx.fillStyle = css.getPropertyValue('--color-frame').trim();
+    rows.forEach(function (row, y) {
+      row.forEach(function (dark, x) { if (dark) ctx.fillRect(x + QR_QUIET_ZONE, y + QR_QUIET_ZONE, 1, 1); });
     });
   }
 
@@ -178,7 +176,7 @@
       body += topbar({ back: 'senior' }) +
         '<div class="intro">' + I.couple(186, 'คุณตาและคุณยาย') + '<h3 class="page-title">เชื่อมต่อกับลูกหลาน</h3>' +
         '<p class="muted lead">ให้ลูกหลานสแกน QR หรือใส่รหัส 6 หลัก</p></div>' +
-        '<div class="card center"><div class="qr-frame"><canvas class="qr" id="qr"></canvas></div><div class="muted small">(QR จำลอง)</div>' +
+        '<div class="card center"><div class="qr-frame"><canvas class="qr" id="qr" role="img" aria-label="QR รหัสเชิญ"></canvas></div>' +
         '<div class="muted">' + (expired ? 'รหัสนี้หมดอายุแล้ว — กดสร้างรหัสใหม่' : 'รหัสเชิญ · ใช้ได้ 1 ครั้ง ถึงเวลา ' + fmt(inv.expiresAt)) + '</div>' +
         '<div class="code">' + inv.code + '</div></div>' +
         (S.store.senior.consentAt === null
@@ -272,10 +270,20 @@
       heroCard('<div class="hero-text"><span class="hero-title">เชื่อมต่อกับผู้สูงอายุ</span><span class="hero-sub">สแกน QR หรือใส่รหัสจากโทรศัพท์ผู้สูงอายุ</span></div>', I.couple(124), 'with-art') +
       '<div class="card">' +
       (S.cameraAllowed
-        ? '<button class="btn" data-act="scan-qr">' + I.svg('qr', 26) + ' สแกน QR (จำลอง)</button><div class="divider">หรือใส่รหัส 6 หลัก</div>'
+        ? qrScanControls() + '<div class="divider">หรือใส่รหัส 6 หลัก</div>'
         : '<div class="msg info">ไม่ได้รับอนุญาตใช้กล้อง — ใส่รหัส 6 หลักแทน</div>') +
       '<div class="field"><label for="code-in">รหัส 6 หลัก</label><input id="code-in" inputmode="numeric" maxlength="6" placeholder="000000"></div>' +
       '<button class="btn" data-act="pair-code">เชื่อมต่อ</button></div>' + msg(S.cgMsg);
+  }
+
+  // ระหว่างเปิดกล้อง: ช่องวิดีโอ (qrScanner.mount ใส่วิดีโอหลังวาดหน้าจอ) · ปกติ: ปุ่มสแกน + ทางสำรองเลือกรูป
+  function qrScanControls() {
+    if (SCANNER.isScanning()) {
+      return '<div id="qr-slot"></div><p class="muted center">เล็งกล้องไปที่ QR บนโทรศัพท์ผู้สูงอายุ</p>' +
+        '<button class="btn ghost" data-act="scan-stop">หยุดสแกน</button>';
+    }
+    return '<button class="btn" data-act="scan-qr">' + I.svg('qr', 26) + ' สแกน QR</button>' +
+      '<div class="center"><button class="link" data-act="pick-qr">เลือกรูป QR จากเครื่อง</button></div>';
   }
 
   const PAIR_ERRORS = {
@@ -300,11 +308,14 @@
           '<span class="muted block">' + scheduleLabel(m.schedule) + '</span></span></div>';
       }).join('') + '</div>';
     }
+    if (S.reading) {
+      return h + '<div class="card center" role="status"><b>กำลังอ่านฉลาก…</b>' +
+        '<div class="muted" id="ocr-progress">ครั้งแรกใช้เวลานานกว่า (โหลดตัวอ่านฉลากในเครื่อง)</div></div>';
+    }
     if (!S.draft) {
       return h + (S.cameraAllowed
-        ? '<h4 class="section-title">ถ่ายรูปฉลากยา (จำลอง: เลือกฉลากตัวอย่าง)</h4><div class="samples">' + LABEL.SAMPLES.map(function (x) {
-            return '<button data-act="scan-label" data-id="' + x.id + '"><span class="row-ic waiting">' + I.svg('camera', 22) + '</span><span>' + esc(x.label) + '<small>' + x.covers + '</small></span></button>';
-          }).join('') + '</div>'
+        ? '<button class="btn" data-act="scan-label">' + I.svg('camera', 26) + ' ถ่ายรูป / เลือกรูปฉลาก</button>' +
+          '<p class="muted small center">ไม่มีฉลากจริง ใช้รูปตัวอย่างในโฟลเดอร์ prototype/samples/</p>'
         : '<div class="msg info">ไม่ได้รับอนุญาตใช้กล้อง — กรอกข้อมูลยาเอง</div>') +
         '<button class="btn ghost" data-act="manual">กรอกข้อมูลเอง</button>';
     }
@@ -314,11 +325,10 @@
     h += (S.draftNote ? msg(S.draftNote) : '') + '<div class="card">' +
       '<div class="field' + flag('name') + '"><label>ชื่อยา' + tag('name') + '</label><input data-f="name" value="' + esc(d.name) + '"></div>' +
       '<div class="field' + flag('tabletsPerDose') + '"><label>จำนวนเม็ดต่อครั้ง' + tag('tabletsPerDose') + '</label><input data-f="tabletsPerDose" type="number" min="1" value="' + esc(d.tabletsPerDose) + '"></div>' +
-      '<div class="field"><label>เวลากินตามฉลาก</label><select data-f="type">' +
-        [['after', 'หลังอาหาร'], ['before', 'ก่อนอาหาร'], ['bedtime', 'ก่อนนอน']].map((o) => '<option value="' + o[0] + '"' + (t.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
-      '</select></div>' +
-      (t.type !== 'bedtime' ? '<div class="field"><label>มื้อ</label><select data-f="meal">' +
-        MEAL_OPTIONS.map((o) => '<option value="' + o[0] + '"' + (t.meal === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' : '') +
+      '<div class="field' + flag('type') + '"><label>เวลากินตามฉลาก' + tag('type') + '</label><select data-f="type">' +
+        options([['after', 'หลังอาหาร'], ['before', 'ก่อนอาหาร'], ['bedtime', 'ก่อนนอน']], t.type) + '</select></div>' +
+      (t.type !== 'bedtime' ? '<div class="field' + flag('meal') + '"><label>มื้อ' + tag('meal') + '</label><select data-f="meal">' +
+        options(MEAL_OPTIONS, t.meal) + '</select></div>' : '') +
       (t.type === 'before' ? '<div class="field' + flag('minutes') + '"><label>ก่อนอาหารกี่นาที' + tag('minutes') + '</label><input data-f="minutes" type="number" min="1" value="' + esc(t.minutes) + '"></div>' : '') +
       '<div class="field"><label>ข้อควรระวัง (ถ้าฉลากมี)</label><input data-f="warnings" value="' + esc(d.warnings) + '"></div>' +
       '<div class="field"><label>ข้อห้ามใช้ (ถ้าฉลากมี)</label><input data-f="contraindications" value="' + esc(d.contraindications) + '"></div>' +
@@ -332,6 +342,12 @@
     }
     h += scheduleForm(d.schedule) + '<div class="msg info" id="preview"></div>';
     return h;
+  }
+
+  // ตัวเลือกของ <select> · ค่ายังว่าง (อ่านจากฉลากไม่ได้) → แสดง "เลือก" ไม่เลือกให้เอง (BR-04)
+  function options(list, value) {
+    return (value ? '' : '<option value="" selected disabled>— เลือก —</option>') +
+      list.map((o) => '<option value="' + o[0] + '"' + (value === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('');
   }
 
   // ความถี่ + วันเริ่ม–สิ้นสุด (กฎอยู่ใน logic.js: validSchedule, takesOn)
@@ -359,6 +375,7 @@
     const d = S.draft;
     if (f === 'minutes') return !(Number(d.timing.minutes) > 0);
     if (f === 'tabletsPerDose') return !(Number(d.tabletsPerDose) > 0);
+    if (f === 'type' || f === 'meal') return !d.timing[f];
     return !String(d[f] || '').trim();
   }
 
@@ -444,6 +461,7 @@
   function render() {
     document.querySelector('.phones').classList.toggle('swapped', !!S.swapped);
     renderDemo(); renderSenior(); renderCaregiver(); refreshDraft(); S.ringing = false;
+    SCANNER.mount(document.getElementById('qr-slot'));   // กล้องสแกน QR: ย้ายวิดีโอเข้าหน้าจอใหม่ หรือปิดถ้าออกจากหน้าแล้ว
   }
 
   /* ---------- สถานการณ์ตัวอย่าง ---------- */
@@ -538,24 +556,23 @@
       case 'sound': enableSound(); break;
       case 'consent': M.consent(S.store, S.now); log('Senior กดยินยอม'); break;
       case 'new-code': M.newInviteCode(S.store, S.now); S.srMsg = { kind: 'info', text: 'สร้างรหัสใหม่แล้ว' }; log('สร้างรหัสเชิญใหม่'); break;
-      case 'scan-qr': { const r = tryPair(CAREGIVER, S.store.invite.code); S.cgMsg = r.ok ? null : { kind: 'error', text: PAIR_ERRORS[r.error] }; break; }
+      case 'scan-qr':
+        S.cgMsg = null;
+        if (SCANNER.canUseCamera()) { SCANNER.start(pairFromQr, onCameraError); log('ผู้ดูแลเปิดกล้องสแกน QR'); }
+        else qrPicker.click();   // ไม่มีกล้องสด (เช่น เปิดไฟล์บนมือถือ) → เลือก/ถ่ายรูปแทน
+        break;
+      case 'scan-stop': SCANNER.stop(); break;
+      case 'pick-qr': S.cgMsg = null; qrPicker.click(); return;
       case 'pair-code': { const r = tryPair(CAREGIVER, document.getElementById('code-in').value); S.cgMsg = r.ok ? null : { kind: 'error', text: PAIR_ERRORS[r.error] }; break; }
       case 'unpair-ask': S.dialog = t.dataset.side; break;
       case 'unpair-cancel': S.dialog = null; break;
       case 'unpair-confirm':
-        M.unpair(S.store, S.now); S.dialog = null; S.draft = null; S.saved = null; S.reminderOpen = false;
+        M.unpair(S.store, S.now); S.dialog = null; S.draft = null; S.saved = null; S.reading = false; S.reminderOpen = false;
         S.cgMsg = { kind: 'info', text: 'ยกเลิกการจับคู่แล้ว · ข้อมูลยาและประวัติถูกลบ' };
         log('ยกเลิกการจับคู่ — ลบข้อมูลยาและประวัติ, Senior ได้ QR ใหม่ (FR-01 ✗6)');
         break;
       case 'tab': S.cgTab = t.dataset.tab; S.cgMsg = null; break;
-      case 'scan-label': {
-        const r = LABEL.readLabel(id); S.cgMsg = null;
-        S.mealDraft = Object.assign({}, DEFAULT_MEALS);
-        if (!r.ok) { startDraft(null); S.draftNote = { kind: 'error', text: 'อ่านรูปไม่ได้ — กรอกข้อมูลเองในฟอร์มด้านล่าง' }; log('สแกนล้มเหลว → ฟอร์มว่าง (FR-02 ✗5)'); break; }
-        if (r.draft.timing.type === 'asNeeded') { S.cgMsg = { kind: 'error', text: 'ระบบยังไม่รองรับยาเมื่อมีอาการ — ไม่ได้สร้างตาราง' }; log('ยาเมื่อมีอาการ → ไม่สร้างตาราง (FR-02 ✗4)'); break; }
-        startDraft(r.draft); log('ได้ร่างจากฉลาก — ยังไม่บันทึก (FR-02 ✓1)');
-        break;
-      }
+      case 'scan-label': S.cgMsg = null; labelPicker.click(); return;
       case 'manual': S.mealDraft = Object.assign({}, DEFAULT_MEALS); startDraft(null); break;
       case 'cancel-draft': S.draft = null; S.draftNote = null; S.cgMsg = { kind: 'info', text: 'ยกเลิกแล้ว · ไม่ได้บันทึกอะไร' }; log('ยกเลิกร่าง — ไม่บันทึก (FR-02 ✗7)'); break;
       case 'save': {
@@ -593,12 +610,89 @@
     render();
   });
 
+  /* ---------- ระบบสแกน: QR (FR-01) และฉลากยา (FR-02) ---------- */
+
+  // input เลือก/ถ่ายรูป อยู่นอกโทรศัพท์จำลอง → ไม่หายตอนวาดหน้าจอใหม่ระหว่างที่หน้าต่างเลือกไฟล์เปิดอยู่
+  function filePicker(onFile) {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*'; input.hidden = true;
+    input.addEventListener('change', function () { const file = input.files[0]; input.value = ''; if (file) onFile(file); });
+    document.body.appendChild(input);
+    return input;
+  }
+  const qrPicker = filePicker(onQrImage), labelPicker = filePicker(onLabelImage);
+
+  function pairFromQr(code) {
+    const r = tryPair(CAREGIVER, code);
+    S.cgMsg = r.ok ? null : { kind: 'error', text: PAIR_ERRORS[r.error] };
+    render();
+  }
+  function onCameraError(err) {
+    log('เปิดกล้องไม่ได้ (' + (err && err.name || 'error') + ')');
+    S.cgMsg = { kind: 'info', text: 'เปิดกล้องไม่ได้ — เลือกรูป QR จากเครื่อง หรือใส่รหัส 6 หลักแทน' };
+    render();
+  }
+  function onQrImage(file) {
+    SCANNER.readFile(file).then(function (code) {
+      if (code) { pairFromQr(code); return; }
+      S.cgMsg = { kind: 'error', text: 'ไม่พบ QR ของ MedMind ในรูปนี้ — ลองรูปที่ชัดขึ้น หรือใส่รหัส 6 หลัก' };
+      render();
+    });
+  }
+
+  const UNSUPPORTED_TEXT = {   // BR-07 · FR-02 ✗4
+    asNeeded: 'ระบบยังไม่รองรับยาเมื่อมีอาการ — ไม่ได้สร้างตาราง',
+    notTablet: 'ระบบยังไม่รองรับยาที่ไม่ใช่ยาเม็ด (เช่น ยาน้ำ) — ไม่ได้สร้างตาราง',
+    halfTablet: 'ระบบยังไม่รองรับยาครึ่งเม็ด — ไม่ได้สร้างตาราง',
+  };
+  const MEAL_NAME = Object.fromEntries(MEAL_OPTIONS);
+
+  function onLabelImage(file) {
+    S.reading = true; S.draft = null; S.cgMsg = null;
+    log('ผู้ดูแลเลือกรูปฉลาก — อ่านในเครื่อง ไม่ส่งรูปออกไป');
+    render();
+    OCR.readLabel(file, function (percent) {
+      const el = document.getElementById('ocr-progress');
+      if (el) el.textContent = 'กำลังอ่านข้อความ ' + percent + '%';
+    }).then(function (r) {
+      if (!S.reading) return;   // ระหว่างอ่าน มีการเริ่มใหม่ / ยกเลิกการจับคู่ → ทิ้งผล
+      S.reading = false;
+      applyLabelResult(r);
+      render();
+    });
+  }
+
+  // ผลอ่านฉลาก → ร่างให้ผู้ดูแลตรวจ (ยังไม่บันทึก · FR-02 ✓1)
+  function applyLabelResult(r) {
+    S.mealDraft = Object.assign({}, DEFAULT_MEALS);
+    if (!r.ok) {
+      startDraft(null);
+      S.draftNote = { kind: 'error', text: OCR.REASON_TEXT[r.reason] };
+      log('อ่านฉลากไม่ได้ → ฟอร์มว่าง (FR-02 ✗5)');
+      return;
+    }
+    const parsed = PARSER.parseLabel(r.text);
+    if (parsed.unsupported) {
+      S.cgMsg = { kind: 'error', text: UNSUPPORTED_TEXT[parsed.unsupported] };
+      log('ฉลากเป็นยาที่ไม่รองรับ → ไม่สร้างตาราง (FR-02 ✗4)');
+      return;
+    }
+    startDraft(parsed.draft);
+    if (parsed.meals.length > 1) {   // ร่างใช้มื้อแรก — ยา 1 รายการเตือน 1 มื้อ
+      const names = parsed.meals.map((m) => MEAL_NAME[m]).join(', ');
+      const note = 'ฉลากระบุหลายมื้อ (' + names + ') — บันทึกมื้อ' + MEAL_NAME[parsed.meals[0]] + 'ก่อน แล้วเพิ่มยาอีกครั้งสำหรับมื้อที่เหลือ';
+      S.draftNote = { kind: 'info', text: S.draftNote ? S.draftNote.text + ' · ' + note : note };
+    }
+    log('ได้ร่างจากฉลาก — ยังไม่บันทึก (FR-02 ✓1)');
+  }
+
   function startDraft(draft) {
     S.draft = draft || { name: '', tabletsPerDose: '', timing: { type: 'after', meal: 'breakfast', minutes: '' }, warnings: '', contraindications: '' };
     // ความถี่เริ่มต้น: ทุกวัน เริ่มวันนี้ ไม่มีวันสิ้นสุด (ผู้ดูแลเปลี่ยนได้)
     S.draft.schedule = { days: [0, 1, 2, 3, 4, 5, 6], start: S.store.today, end: null };
     // ช่อง "ก่อนอาหารกี่นาที" นับเฉพาะยาก่อนอาหาร — ยาหลังอาหาร / ก่อนนอนไม่มีช่องนี้
-    S.unreadable = draft ? ['name', 'tabletsPerDose'].concat(S.draft.timing.type === 'before' ? ['minutes'] : []).filter(isEmptyField) : [];
+    const t = S.draft.timing;
+    S.unreadable = draft ? ['name', 'tabletsPerDose', 'type'].concat(t.type !== 'bedtime' ? ['meal'] : [], t.type === 'before' ? ['minutes'] : []).filter(isEmptyField) : [];
     S.draftNote = S.unreadable.length ? { kind: 'info', text: 'บางช่องอ่านจากฉลากไม่ได้ — กรุณาตรวจสอบและกรอกเอง' } : null;
   }
 

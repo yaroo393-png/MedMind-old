@@ -28,8 +28,16 @@
     </div>
   </main>
 
+  <!-- ไลบรารีระบบสแกน (เก็บในเครื่อง ไม่โหลดจากเน็ต · ดู vendor/README.md) -->
+  <script src="vendor/jsqr/jsQR.js"></script>
+  <script src="vendor/qrcode/qrcode.js"></script>
+  <script src="vendor/tesseract/tesseract.min.js"></script>
+
   <script src="src/logic.js"></script>
-  <script src="src/readLabel.mock.js"></script>
+  <script src="src/qrCode.js"></script>
+  <script src="src/qrScanner.js"></script>
+  <script src="src/labelParser.js"></script>
+  <script src="src/readLabel.js"></script>
   <script src="src/icons.js"></script>
   <script src="src/app.js"></script>
 </body>

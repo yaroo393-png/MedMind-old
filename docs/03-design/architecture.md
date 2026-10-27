@@ -75,7 +75,7 @@ graph TD
 **ADR-03 — การอ่านฉลากอยู่หลัง adapter `readLabel` และได้แค่ "ร่าง"**
 - *Context:* ผลอ่านฉลากอาจผิด (SRS §6) และผู้ให้บริการภายนอกอาจล่ม (SRS §1.2)
 - *Decision:* `readLabel` คืนค่าเป็นร่างเท่านั้น ช่องที่อ่านไม่ได้เป็นค่าว่าง + "กรุณาตรวจสอบ" (BR-04) · ข้อมูลยาถูกบันทึกเมื่อ Caregiver กดบันทึกเท่านั้น · อ่านไม่ได้ → เปิดฟอร์มว่างให้กรอกเอง (FR-02 ✗5)
-- *Consequence:* เปลี่ยนผู้ให้บริการได้โดยไม่แตะโมดูลอื่น · prototype ใช้ร่างจำลองแทนการอ่านจริง (NFR-08 ตรวจได้เมื่อมีการอ่านฉลากจริง)
+- *Consequence:* เปลี่ยนผู้ให้บริการได้โดยไม่แตะโมดูลอื่น · prototype อ่านฉลากจริงในเครื่องด้วย Tesseract.js (`readLabel.js` อ่านรูป → `labelParser.js` แยกเป็นร่าง) ไม่ส่งรูปออกนอกเครื่อง · NFR-08 ยังต้องวัดกับฉลากจริง
 
 **ADR-04 — ทุกการอ่านข้อมูลผ่าน Pairing**
 - *Context:* Caregiver ต้องเห็นเฉพาะ Senior ที่จับคู่ไว้ (NFR-04) และหลังยกเลิกการจับคู่ต้องดูไม่ได้และข้อมูลถูกลบ (NFR-10, BR-17)
@@ -361,12 +361,12 @@ Event: `MedicationSaved` → `DoseConfirmed` / `DoseUnconfirmed` → `DoseConfir
 
 ### 7.1 Traceability: FR → Operation → Entity → Screen
 
-Operation = ฟังก์ชันใน `prototype/src/logic.js` (และ adapter `readLabel.mock.js`) · ในวงเล็บคือสิ่งที่ทำกับ entity: C = สร้าง, R = อ่าน, U = แก้, D = ลบ
+Operation = ฟังก์ชันใน `prototype/src/logic.js` (และระบบสแกน `qrCode.js`, `readLabel.js`, `labelParser.js`) · ในวงเล็บคือสิ่งที่ทำกับ entity: C = สร้าง, R = อ่าน, U = แก้, D = ลบ
 
 | FR | Operation | Entity (C/R/U/D) | Screen |
 |---|---|---|---|
-| FR-01 จับคู่ | `newInviteCode` · `consent` · `pair` · `unpair` · `canAccess` | INVITE_CODE (C, U `usedAt`) · SENIOR (U `consentAt`) · PAIRING (C, R, D) · `unpair` ลบ MEDICATION, MEAL_TIMES, DOSE_SESSION, NOTIFICATION_LOG ของคู่นี้ด้วย (BR-17) | R0, S1, C1 |
-| FR-02 สแกนฉลาก | `readLabel` (adapter) · `validateDraft` · `setMealTimes` · `reminderTime` · `saveMedication` | MEDICATION (C) · MEAL_TIMES (C, U) | C2 |
+| FR-01 จับคู่ | `newInviteCode` · `qrMatrix` / `readQr` (QR) · `consent` · `pair` · `unpair` · `canAccess` | INVITE_CODE (C, U `usedAt`) · SENIOR (U `consentAt`) · PAIRING (C, R, D) · `unpair` ลบ MEDICATION, MEAL_TIMES, DOSE_SESSION, NOTIFICATION_LOG ของคู่นี้ด้วย (BR-17) | R0, S1, C1 |
+| FR-02 สแกนฉลาก | `readLabel` (adapter) · `parseLabel` · `validateDraft` · `setMealTimes` · `reminderTime` · `saveMedication` | MEDICATION (C) · MEAL_TIMES (C, U) | C2 |
 | FR-03 แจ้งเตือน | `startDay` · `tick` (รอบเตือน BR-08) · `dueSessions` | DOSE_SESSION (C, U `round`, `status`) · DOSE_ITEM (C) | S2 |
 | FR-04 ยืนยัน | `confirm` · `notYet` · `canConfirmLate` · `lateUntil` · `medsOf` | DOSE_SESSION (U `confirmedAt`, `status`) · DOSE_ITEM (R) · MEDICATION (R) | S2, S3 |
 | FR-05 แจ้ง Caregiver + สถานะ | `escalate` (เรียกจาก `tick` / `notYet`) · `notify` (เรียกจาก `escalate` / `confirm` ยืนยันช้า) · `dailyStatus` · `statusLabel` | NOTIFICATION_LOG (C) · DOSE_SESSION (R, U `caregiverAlertedAt`) | C3 |
